@@ -1,0 +1,9 @@
+{
+  "overrides": {
+  },
+  "geocodeCache": {
+  },
+  "lastUpdated": "2025-11-06T12:00:00Z",
+  "version": "1.0",
+  "description": "Festival location corrections, geocoding cache, and coordinate overrides"
+}
