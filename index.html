@@ -1,0 +1,960 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>פסטיבל הנדיב 7 מפה</title>
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"
+  />
+  <style>
+    /* Reset margin and padding */
+    body,
+    html {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+    }
+
+    /* Full‑page map container */
+    #map {
+      height: 100vh;
+      width: 100%;
+    }
+
+    /* Popup styling */
+    .popup {
+      max-width: 300px;
+      line-height: 1.4;
+    }
+    .popup h3 {
+      margin-top: 0;
+    }
+
+    /* Details sidebar for event information */
+    #details {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      width: 320px;
+      max-height: 90vh;
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      padding: 12px;
+      font-size: 14px;
+    }
+    #details h3 {
+      margin-top: 0;
+    }
+
+    /* Sidebar for statistics and event list */
+    #sidebar {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      width: 320px;
+      max-height: 90vh;
+      overflow-y: auto;
+      background: rgba(255, 255, 255, 0.95);
+      border-radius: 8px;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+      padding: 12px;
+      font-size: 14px;
+      z-index: 1000;
+    }
+    #counts {
+      margin-bottom: 8px;
+    }
+    /* Container for the date filter input */
+    #dateFilterContainer {
+      margin-bottom: 8px;
+    }
+    #eventList {
+      /* Reserve space for filter checkboxes and counts */
+      max-height: calc(90vh - 200px);
+      overflow-y: auto;
+    }
+    #dayFilterContainer,
+    #availableFilterContainer {
+      margin-bottom: 8px;
+    }
+    .event-item {
+      cursor: pointer;
+      padding: 4px 0;
+      border-bottom: 1px solid #eee;
+      /* Align Hebrew text to the right within each event item */
+      direction: rtl;
+      text-align: right;
+    }
+    .event-item:hover {
+      background-color: #f5f5f5;
+    }
+    .event-item.active {
+      background-color: #d0eaff;
+    }
+    /* Style for events that could not be geocoded */
+    .event-item.not-found {
+      color: #999;
+      font-style: italic;
+    }
+
+    /* Progress bar styling */
+    #geocodeProgress {
+      display: none;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: #f0f8ff;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+    }
+
+    #geocodeProgress.active {
+      display: block;
+    }
+
+    #geocodeProgress p {
+      margin: 0 0 6px 0;
+      font-size: 13px;
+      font-weight: bold;
+    }
+
+    .progress-bar-container {
+      width: 100%;
+      height: 20px;
+      background: #e0e0e0;
+      border-radius: 4px;
+      overflow: hidden;
+      position: relative;
+    }
+
+    .progress-bar-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #4CAF50, #45a049);
+      width: 0%;
+      transition: width 0.3s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 11px;
+      font-weight: bold;
+    }
+
+    /* Align Hebrew text to the right for RTL languages */
+    #sidebar,
+    #details,
+    .popup {
+      direction: rtl;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <!-- Details panel shown on marker click -->
+  <div id="details">
+    <p>Select an event marker to view details here.</p>
+  </div>
+
+  <!-- Sidebar containing event statistics and list -->
+  <div id="sidebar">
+    <!-- Progress bar for background geocoding -->
+    <div id="geocodeProgress">
+      <p>🔍 מחפש קואורדינטות...</p>
+      <div class="progress-bar-container">
+        <div class="progress-bar-fill" id="progressBarFill"></div>
+      </div>
+      <p id="progressText" style="text-align: center; margin: 4px 0 0 0; font-size: 12px;"></p>
+    </div>
+    <!-- Day filter checkboxes will be inserted here dynamically -->
+    <div id="dayFilterContainer">
+      <strong>סינון לפי ימים:</strong><br />
+    </div>
+    <!-- Available events checkbox -->
+    <div id="availableFilterContainer">
+      <label><input type="checkbox" id="availableFilter" /> רק אירועים עם מקומות פנויים</label>
+    </div>
+    <div id="counts">
+      טוען אירועים...
+    </div>
+    <div id="eventList"></div>
+  </div>
+
+  <!-- Leaflet JS -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    /*
+      This script initializes a map centered on Pardes Hana–Karkur and
+      automatically fetches festival events for 2025 from the Hanadiv API. For
+      each event it performs a geocode lookup via photon.komoot.io to get
+      approximate latitude/longitude based on the street and house number, then
+      adds a marker with a popup containing the event details and external
+      links. Note: geocoding may occasionally fail for ambiguous or incomplete
+      addresses; those events will simply be skipped.
+    */
+
+    // Cache for geocode results. We use localStorage to persist across sessions.
+    const geocodeCache = (() => {
+      try {
+        const stored = localStorage.getItem('geocodeCache');
+        return stored ? JSON.parse(stored) : {};
+      } catch (e) {
+        return {};
+      }
+    })();
+
+    // Initialize the map centered on Pardes Hana–Karkur
+    const map = L.map('map').setView([32.475, 34.975], 13);
+
+    // Store markers by event ID for easy lookup when selecting from the list
+    const markers = {};
+
+    // Map of location key to marker for handling multiple events at the same location
+    const markerLocationMap = {};
+    // Map of event ID to corresponding list item element for highlighting
+    const listItemByEventId = {};
+
+    // Add OpenStreetMap tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      maxZoom: 19,
+    }).addTo(map);
+
+    // Helper to create safe HTML links from optional fields
+    function createLink(url) {
+      if (!url) return '';
+      // If the URL does not start with a protocol, prepend https://
+      const hasProtocol = /^(https?:)?\/\//.test(url);
+      const fullUrl = hasProtocol ? url : 'https://' + url;
+      return '<a href="' + fullUrl + '" target="_blank" rel="noopener">' + url + '</a>';
+    }
+
+    // Update the details panel with full event information
+    function updateDetails(event, lat, lng) {
+      const detailsEl = document.getElementById('details');
+      // Compose optional links
+      const link1 = createLink(event.externalLink1);
+      const link2 = createLink(event.externalLink2);
+      const links = [link1, link2].filter(Boolean).join(' | ');
+      // Compose amenities information
+      const amenities = [];
+      if (event.hasParking) amenities.push('Parking');
+      if (event.isAccessible) amenities.push('Accessible');
+      if (event.petFriendly) amenities.push('Pet friendly');
+      if (event.piano) amenities.push('Piano available');
+      if (event.canHostNoisyEvents) amenities.push('Noisy events allowed');
+      const amenitiesInfo = amenities.join(', ');
+      // Build the full address/geocode query string for display
+      const addrParts = [];
+      if (event.street) addrParts.push(event.street);
+      if (event.houseNumber) addrParts.push(event.houseNumber);
+      addrParts.push('Pardes Hana-Karkur');
+      addrParts.push('Israel');
+      const geocodeQuery = addrParts.filter(Boolean).join(' ');
+      // Compose content HTML
+      let html = '';
+      html += '<h3>' + (event.title || '') + '</h3>';
+      // Date and hour
+      html += '<p><strong>תאריך:</strong> ' + (event.date || '') + '</p>';
+      if (event.hour) {
+        html += '<p><strong>שעה:</strong> ' + event.hour + '</p>';
+      }
+      // Display the geocode query string used for lookup
+      html += '<p><strong>כתובת לחיפוש:</strong> ' + geocodeQuery + '</p>';
+      // Show individual address fields
+      if (event.placeDescription) html += '<p><strong>תיאור המקום:</strong> ' + event.placeDescription + '</p>';
+      if (event.street) html += '<p><strong>רחוב:</strong> ' + event.street + '</p>';
+      if (event.houseNumber) html += '<p><strong>מספר בית:</strong> ' + event.houseNumber + '</p>';
+      // Show capacity information: number of registrants vs the smallest specified capacity
+      const attendeesCount = (event.attendees && Array.isArray(event.attendees)) ? event.attendees.length : 0;
+      // Determine actual capacity using totalNumberOfPeopleThatCanAttend, limitNumberOfPeople or maxNumberOfPeople
+      const caps = [];
+      if (typeof event.totalNumberOfPeopleThatCanAttend === 'number') caps.push(event.totalNumberOfPeopleThatCanAttend);
+      if (typeof event.limitNumberOfPeople === 'number') caps.push(event.limitNumberOfPeople);
+      if (typeof event.maxNumberOfPeople === 'number') caps.push(event.maxNumberOfPeople);
+      const positiveCaps = caps.filter(cap => cap > 0);
+      if (positiveCaps.length > 0) {
+        const actualCap = Math.min.apply(null, positiveCaps);
+        html += '<p><strong>תפוסה:</strong> ' + attendeesCount + ' / ' + actualCap + '</p>';
+      }
+      // Event details
+      if (event.details) html += '<p>' + event.details.replace(/\n/g, '<br>') + '</p>';
+      // External links
+      if (links) html += '<p>' + links + '</p>';
+      // Link to the festival event page
+      if (event.eventID) {
+        const eventPageUrl = 'https://2025.hanadiv.org/event-page/' + event.eventID;
+        html += '<p><a href="' + eventPageUrl + '" target="_blank" rel="noopener">לעמוד האירוע</a></p>';
+      }
+      // Coordinates
+      if (typeof lat === 'number' && typeof lng === 'number') {
+        html += '<p><strong>קואורדינטות:</strong> ' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</p>';
+      } else {
+        html += '<p><strong>קואורדינטות:</strong> לא זמינות (לא ניתן לאתר את המיקום)</p>';
+      }
+      detailsEl.innerHTML = html;
+    }
+
+    // Shared geocoding helper function used by both initial load and background geocoding
+    // This function tries multiple geocoding services and strategies for reliable results
+    async function tryGeocode(query) {
+      // If we already have this query cached, return it immediately
+      if (geocodeCache[query]) {
+        return geocodeCache[query];
+      }
+      try {
+        // First try Photon API (faster, good for most queries)
+        const photonUrl = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(query) + '&limit=1';
+        const photonResponse = await fetch(photonUrl);
+        const photonData = await photonResponse.json();
+        if (photonData.features && photonData.features.length > 0) {
+          const [lng, lat] = photonData.features[0].geometry.coordinates;
+          if (typeof lat === 'number' && typeof lng === 'number') {
+            // Store result in cache and persist
+            geocodeCache[query] = { lat, lng };
+            try {
+              localStorage.setItem('geocodeCache', JSON.stringify(geocodeCache));
+            } catch (e) {
+              // Ignore storage errors
+            }
+            return { lat, lng };
+          }
+        }
+        // Fallback to Nominatim API (OpenStreetMap) if Photon fails
+        await new Promise(resolve => setTimeout(resolve, 300));
+        try {
+          // Use viewbox to restrict search to Israel region (roughly bounded by lat/lng)
+          // Israel bounds: lat 29-34, lng 34-36
+          const nominatimUrl = 'https://nominatim.openstreetmap.org/search?' +
+            'q=' + encodeURIComponent(query) +
+            '&viewbox=34,29,36,34' +  // Israel viewbox
+            '&bounded=1' +              // Only search within viewbox
+            '&limit=1&format=json&countrycodes=il';  // Limit to Israel
+          const nominatimResponse = await fetch(nominatimUrl, {
+            headers: { 'User-Agent': 'Festival-Map-App (https://example.com)' }
+          });
+          const nominatimData = await nominatimResponse.json();
+          if (nominatimData && nominatimData.length > 0) {
+            const lat = parseFloat(nominatimData[0].lat);
+            const lng = parseFloat(nominatimData[0].lon);
+            if (typeof lat === 'number' && typeof lng === 'number') {
+              // Store result in cache and persist
+              geocodeCache[query] = { lat, lng };
+              try {
+                localStorage.setItem('geocodeCache', JSON.stringify(geocodeCache));
+              } catch (e) {
+                // Ignore storage errors
+              }
+              return { lat, lng };
+            }
+          }
+        } catch (nominatimErr) {
+          console.warn('Nominatim geocode error for', query, nominatimErr);
+        }
+      } catch (err) {
+        console.warn('Photon geocode error for', query, err);
+      }
+      return null;
+    }
+
+    // Fetch events from the Hanadiv festival API and display them on the map
+    async function loadEvents() {
+      try {
+        const response = await fetch('https://api.hanadiv.org/event?festival=2025');
+        const events = await response.json();
+        // Save the entire events array globally so we can filter by date later
+        window.allEvents = events;
+        // Function to geocode a single event using a hierarchy of search terms. It first attempts to geocode
+        // with street and houseNumber. If no coordinates are found, it will fall back to using placeNotes
+        // (or placeDescription) combined with Pardes Hana-Karkur and Israel. Results are cached in
+        // geocodeCache and persisted in localStorage to improve future lookups.
+        const geocodeEvent = async (event) => {
+          // Helper to perform the geocode fetch and parse the first result
+          async function tryGeocode(query) {
+            // If we already have this query cached, return it immediately
+            if (geocodeCache[query]) {
+              return geocodeCache[query];
+            }
+            try {
+              // First try Photon API
+              const photonUrl = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(query) + '&limit=1';
+              const photonResponse = await fetch(photonUrl);
+              const photonData = await photonResponse.json();
+              if (photonData.features && photonData.features.length > 0) {
+                const [lng, lat] = photonData.features[0].geometry.coordinates;
+                if (typeof lat === 'number' && typeof lng === 'number') {
+                  // Store result in cache and persist
+                  geocodeCache[query] = { lat, lng };
+                  try {
+                    localStorage.setItem('geocodeCache', JSON.stringify(geocodeCache));
+                  } catch (e) {
+                    // Ignore storage errors
+                  }
+                  return { lat, lng };
+                }
+              }
+              // Fallback to Nominatim API (OpenStreetMap) if Photon fails
+              // Add a small delay to avoid rate limiting
+              await new Promise(resolve => setTimeout(resolve, 300));
+              try {
+                // Use viewbox to restrict search to Israel region (roughly bounded by lat/lng)
+                // Israel bounds: lat 29-34, lng 34-36
+                const nominatimUrl = 'https://nominatim.openstreetmap.org/search?' +
+                  'q=' + encodeURIComponent(query) +
+                  '&viewbox=34,29,36,34' +  // Israel viewbox
+                  '&bounded=1' +              // Only search within viewbox
+                  '&limit=1&format=json&countrycodes=il';  // Limit to Israel
+                const nominatimResponse = await fetch(nominatimUrl, {
+                  headers: { 'User-Agent': 'Festival-Map-App (https://example.com)' }
+                });
+                const nominatimData = await nominatimResponse.json();
+                if (nominatimData && nominatimData.length > 0) {
+                  const lat = parseFloat(nominatimData[0].lat);
+                  const lng = parseFloat(nominatimData[0].lon);
+                  if (typeof lat === 'number' && typeof lng === 'number') {
+                    // Store result in cache and persist
+                    geocodeCache[query] = { lat, lng };
+                    try {
+                      localStorage.setItem('geocodeCache', JSON.stringify(geocodeCache));
+                    } catch (e) {
+                      // Ignore storage errors
+                    }
+                    return { lat, lng };
+                  }
+                }
+              } catch (nominatimErr) {
+                console.warn('Nominatim geocode error for', query, nominatimErr);
+              }
+            } catch (err) {
+              console.warn('Photon geocode error for', query, err);
+            }
+            return null;
+          }
+
+          // Progressive query strategy: try increasingly specific queries
+          // This matches how Google Maps works - simpler queries often succeed better
+
+          // Attempt 1: Just street and house number (simplest query)
+          if (event.street && event.houseNumber) {
+            const simpleQuery = event.street + ' ' + event.houseNumber;
+            const result = await tryGeocode(simpleQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: simpleQuery };
+            }
+          }
+
+          // Attempt 2: Street and house number with Pardes Hana
+          if (event.street && event.houseNumber) {
+            const withCityQuery = event.street + ' ' + event.houseNumber + ' Pardes Hana';
+            const result = await tryGeocode(withCityQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: withCityQuery };
+            }
+          }
+
+          // Attempt 3: Street and house number with full address (original format)
+          if (event.street && event.houseNumber) {
+            const fullQuery = event.street + ' ' + event.houseNumber + ' Pardes Hana-Karkur Israel';
+            const result = await tryGeocode(fullQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: fullQuery };
+            }
+          }
+
+          // Attempt 4: Try placeDescription or placeNotes without city/country
+          if (event.placeDescription || event.placeNotes) {
+            const placeQuery = event.placeDescription || event.placeNotes;
+            const result = await tryGeocode(placeQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: placeQuery };
+            }
+          }
+
+          // Attempt 5: Try placeDescription or placeNotes with city
+          if (event.placeDescription || event.placeNotes) {
+            const placeWithCityQuery = (event.placeDescription || event.placeNotes) + ' Pardes Hana';
+            const result = await tryGeocode(placeWithCityQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: placeWithCityQuery };
+            }
+          }
+
+          // Attempt 6: Try placeDescription or placeNotes with full address
+          if (event.placeDescription || event.placeNotes) {
+            const placeFullQuery = (event.placeDescription || event.placeNotes) + ' Pardes Hana-Karkur Israel';
+            const result = await tryGeocode(placeFullQuery);
+            if (result) {
+              return { event, lat: result.lat, lng: result.lng, addressStr: placeFullQuery };
+            }
+            // Even if geocode fails, record the query for transparency
+            return { event, addressStr: placeFullQuery };
+          }
+
+          // If no usable address was found, return event without coordinates
+          return { event };
+        };
+        // Fast initial geocoding: uses shared tryGeocode() with multiple strategies
+        const fastGeocodeEvent = async (event) => {
+          // Fast geocoding: try multiple queries starting with most accurate
+          let result = null;
+
+          // Attempt 1: Street + House + English city name (most reliable for OSM data)
+          if (event.street && event.houseNumber && !result) {
+            const query1 = event.street + ' ' + event.houseNumber + ' Pardes Hana';
+            result = await tryGeocode(query1);
+          }
+
+          // Attempt 2: Street + House + City + Country (with geographic context)
+          if (event.street && event.houseNumber && !result) {
+            const query2 = event.street + ' ' + event.houseNumber + ' Pardes Hana, Israel';
+            result = await tryGeocode(query2);
+          }
+
+          // Attempt 3: Street + House + Hebrew city name (fallback)
+          if (event.street && event.houseNumber && !result) {
+            const query3 = event.street + ' ' + event.houseNumber + ' פרדס חנה';
+            result = await tryGeocode(query3);
+          }
+
+          // If we found coordinates, return them
+          if (result && typeof result.lat === 'number' && typeof result.lng === 'number') {
+            return { event, lat: result.lat, lng: result.lng };
+          }
+
+          // If no usable address was found, return event without coordinates
+          return { event };
+        };
+        // Geocode all events concurrently - fast initial pass only
+        const geocodedEvents = await Promise.all(events.map(fastGeocodeEvent));
+        // Group events by geocoded location and create markers per location
+        let geocodedCount = 0;
+        const locationGroups = {};
+        geocodedEvents.forEach(({ event, lat, lng }) => {
+          if (typeof lat === 'number' && typeof lng === 'number') {
+            geocodedCount++;
+            const key = lat.toFixed(5) + ',' + lng.toFixed(5);
+            if (!locationGroups[key]) {
+              locationGroups[key] = { lat, lng, events: [] };
+            }
+            locationGroups[key].events.push(event);
+          }
+        });
+        // Create markers for each location group
+        Object.keys(locationGroups).forEach((key) => {
+          const group = locationGroups[key];
+          const { lat, lng, events: groupEvents } = group;
+          const marker = L.marker([lat, lng]).addTo(map);
+          marker.groupKey = key;
+          marker.groupEvents = groupEvents;
+          marker.currentIndex = 0;
+          // Bind popup with content for the first event in this group
+          marker.bindPopup(buildPopupContent(groupEvents[0], key, 0));
+          // Store marker for this location
+          markerLocationMap[key] = marker;
+          // Map each event ID in this group to this marker and location
+          groupEvents.forEach(ev => {
+            markers[ev.eventID] = { marker, lat, lng, groupKey: key };
+          });
+          // When marker is clicked, update details panel and highlight corresponding list item
+          marker.on('click', () => {
+            const currentEvent = marker.groupEvents[marker.currentIndex];
+            highlightListItem(currentEvent.eventID);
+            updateDetails(currentEvent, lat, lng);
+          });
+        });
+        // Update statistics counts in the sidebar
+        const totalEvents = events.length;
+        const missingCount = totalEvents - geocodedCount;
+        const countsEl = document.getElementById('counts');
+        countsEl.innerHTML =
+          '<strong>סה\"כ אירועים:</strong> ' + totalEvents +
+          '<br><strong>מופו:</strong> ' + geocodedCount +
+          '<br><strong>לא נמצאו:</strong> ' + missingCount;
+
+        // Build day filter checkboxes
+        const dayFilterContainer = document.getElementById('dayFilterContainer');
+        // Clear any existing checkboxes
+        dayFilterContainer.innerHTML = '<strong>סינון לפי ימים:</strong><br />';
+        const uniqueDates = Array.from(new Set(window.allEvents.map(ev => ev.date))).sort();
+        uniqueDates.forEach((date) => {
+          const label = document.createElement('label');
+          label.style.display = 'block';
+          const checkbox = document.createElement('input');
+          checkbox.type = 'checkbox';
+          checkbox.value = date;
+          checkbox.addEventListener('change', renderEventList);
+          label.appendChild(checkbox);
+          label.appendChild(document.createTextNode(' ' + date));
+          dayFilterContainer.appendChild(label);
+        });
+        // Add event listener for available filter
+        const availableFilter = document.getElementById('availableFilter');
+        if (!availableFilter._listenerAttached) {
+          availableFilter.addEventListener('change', renderEventList);
+          availableFilter._listenerAttached = true;
+        }
+        // Render the initial event list
+        renderEventList();
+      } catch (err) {
+        console.error('Failed to load events', err);
+      }
+    }
+
+    // Background geocoding function to find coordinates for events without them
+    async function startBackgroundGeocoding() {
+      // Immediately show progress bar
+      const progressEl = document.getElementById('geocodeProgress');
+      const progressBarFill = document.getElementById('progressBarFill');
+      const progressText = document.getElementById('progressText');
+      progressEl.classList.add('active');
+
+      // Find events without coordinates
+      const eventsNeedingGeocoding = [];
+      window.allEvents.forEach(event => {
+        if (!markers[event.eventID]) {
+          eventsNeedingGeocoding.push(event);
+        }
+      });
+
+      // Update progress text even if no events need geocoding
+      if (eventsNeedingGeocoding.length === 0) {
+        progressText.textContent = 'הכל למצאו! ✓';
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        progressEl.classList.remove('active');
+        return;
+      }
+
+      // Note: Uses the shared tryGeocode() function defined earlier for consistent results
+
+      // Process events one at a time with improved queries
+      for (let i = 0; i < eventsNeedingGeocoding.length; i++) {
+        const event = eventsNeedingGeocoding[i];
+
+        // Update progress bar in real-time
+        const percentage = Math.round(((i + 1) / eventsNeedingGeocoding.length) * 100);
+        progressBarFill.style.width = percentage + '%';
+        progressBarFill.textContent = percentage + '%';
+        progressText.textContent = (i + 1) + ' / ' + eventsNeedingGeocoding.length + ' אירועים';
+
+        // Try geocoding with improved strategies (starting with most specific)
+        let result = null;
+
+        // Attempt 1: Street + House + Hebrew city name (most accurate for Israel)
+        if (event.street && event.houseNumber && !result) {
+          const query1 = event.street + ' ' + event.houseNumber + ' פרדס חנה';
+          result = await tryGeocode(query1);
+        }
+
+        // Attempt 2: Street + House + English city name
+        if (event.street && event.houseNumber && !result) {
+          const query2 = event.street + ' ' + event.houseNumber + ' Pardes Hana';
+          result = await tryGeocode(query2);
+        }
+
+        // Attempt 3: Street + House + City + Country
+        if (event.street && event.houseNumber && !result) {
+          const query3 = event.street + ' ' + event.houseNumber + ' Pardes Hana, Israel';
+          result = await tryGeocode(query3);
+        }
+
+        // Attempt 4: Place description with city
+        if ((event.placeDescription || event.placeNotes) && !result) {
+          const query4 = (event.placeDescription || event.placeNotes) + ' פרדס חנה';
+          result = await tryGeocode(query4);
+        }
+
+        // Attempt 5: Place description with English city
+        if ((event.placeDescription || event.placeNotes) && !result) {
+          const query5 = (event.placeDescription || event.placeNotes) + ' Pardes Hana';
+          result = await tryGeocode(query5);
+        }
+
+        // Attempt 6: Just place description
+        if ((event.placeDescription || event.placeNotes) && !result) {
+          const query6 = event.placeDescription || event.placeNotes;
+          result = await tryGeocode(query6);
+        }
+
+        // If we found coordinates, add the marker to the map immediately
+        if (result && typeof result.lat === 'number' && typeof result.lng === 'number') {
+          const { lat, lng } = result;
+          const key = lat.toFixed(5) + ',' + lng.toFixed(5);
+
+          // Update or create marker at this location
+          let marker = markerLocationMap[key];
+          if (!marker) {
+            // Create new marker and add to map immediately
+            marker = L.marker([lat, lng]).addTo(map);
+            marker.groupKey = key;
+            marker.groupEvents = [];
+            marker.currentIndex = 0;
+            markerLocationMap[key] = marker;
+
+            // Setup marker click handler
+            marker.on('click', () => {
+              const currentEvent = marker.groupEvents[marker.currentIndex];
+              highlightListItem(currentEvent.eventID);
+              updateDetails(currentEvent, lat, lng);
+            });
+          }
+
+          // Add this event to the marker's group
+          if (!marker.groupEvents.includes(event)) {
+            marker.groupEvents.push(event);
+          }
+          markers[event.eventID] = { marker, lat, lng, groupKey: key };
+
+          // Update popup content with the correct event index
+          const eventIndex = marker.groupEvents.length - 1;
+          marker.bindPopup(buildPopupContent(marker.groupEvents[eventIndex], key, eventIndex));
+
+          // Update counts immediately after finding a location
+          let totalGeocoded = 0;
+          Object.keys(markers).forEach(eventID => {
+            if (markers[eventID]) totalGeocoded++;
+          });
+          const countsEl = document.getElementById('counts');
+          const totalEvents = window.allEvents.length;
+          const missingCount = totalEvents - totalGeocoded;
+          countsEl.innerHTML =
+            '<strong>סה"כ אירועים:</strong> ' + totalEvents +
+            '<br><strong>מופו:</strong> ' + totalGeocoded +
+            '<br><strong>לא נמצאו:</strong> ' + missingCount;
+
+          // Re-render the event list in real-time to show new event immediately
+          renderEventList();
+        }
+
+        // Yield control to browser frequently to keep UI responsive
+        if (i % 2 === 0) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+
+      // Hide progress bar and update final statistics
+      progressEl.classList.remove('active');
+
+      // Update counts with final numbers
+      let totalGeocoded = 0;
+      Object.keys(markers).forEach(eventID => {
+        if (markers[eventID]) totalGeocoded++;
+      });
+      const countsEl = document.getElementById('counts');
+      const totalEvents = window.allEvents.length;
+      const missingCount = totalEvents - totalGeocoded;
+      countsEl.innerHTML =
+        '<strong>סה"כ אירועים:</strong> ' + totalEvents +
+        '<br><strong>מופו:</strong> ' + totalGeocoded +
+        '<br><strong>לא נמצאו:</strong> ' + missingCount;
+
+      // Re-render the event list to update styling
+      renderEventList();
+    }
+
+    // Trigger the data load on page load
+    loadEvents().then(() => startBackgroundGeocoding());
+
+    /**
+     * Render the list of events in the sidebar based on the selected date filter.
+     * If no date is selected, all events are shown. Events that could not be
+     * geocoded are styled with the `not-found` class and will update the details
+     * panel with a message when clicked.
+     */
+    function renderEventList() {
+      const eventListEl = document.getElementById('eventList');
+      // Clear existing list
+      eventListEl.innerHTML = '';
+      if (!window.allEvents) return;
+      // Gather selected days from checkboxes
+      const dayCheckboxes = document.querySelectorAll('#dayFilterContainer input[type=checkbox]:checked');
+      const selectedDays = Array.from(dayCheckboxes).map(cb => cb.value);
+      // Determine if only available events should be shown
+      const showAvailableOnly = document.getElementById('availableFilter').checked;
+      // Helper to determine if an event has available spots
+      function isEventAvailable(ev) {
+        // Number of seats taken is the count of attendee records (each record represents a reserved seat)
+        const registrants = (ev.attendees && Array.isArray(ev.attendees)) ? ev.attendees.length : 0;
+        // Determine the actual capacity available for registration. Prefer totalNumberOfPeopleThatCanAttend or limitNumberOfPeople if present,
+        // otherwise fall back to maxNumberOfPeople. If none are provided, consider the event as having unlimited capacity (always available).
+        const capacities = [];
+        if (typeof ev.totalNumberOfPeopleThatCanAttend === 'number') capacities.push(ev.totalNumberOfPeopleThatCanAttend);
+        if (typeof ev.limitNumberOfPeople === 'number') capacities.push(ev.limitNumberOfPeople);
+        if (typeof ev.maxNumberOfPeople === 'number') capacities.push(ev.maxNumberOfPeople);
+        // Filter out negative or zero capacities
+        const validCaps = capacities.filter(cap => cap > 0);
+        // Use the minimum provided capacity if multiple are available
+        const actualCap = validCaps.length > 0 ? Math.min.apply(null, validCaps) : undefined;
+        if (typeof actualCap === 'number') {
+          return registrants < actualCap;
+        }
+        // If no capacity information is provided, assume seats are available
+        return true;
+      }
+      // Filter events based on selected days and availability
+      const eventsToShow = window.allEvents.filter((ev) => {
+        const matchesDay = selectedDays.length > 0 ? selectedDays.includes(ev.date) : true;
+        const matchesAvailability = showAvailableOnly ? isEventAvailable(ev) : true;
+        return matchesDay && matchesAvailability;
+      });
+      // Display each event
+      eventsToShow.forEach((ev) => {
+        const item = document.createElement('div');
+        item.className = 'event-item';
+        // Mark events without coordinates as not-found
+        if (!markers[ev.eventID]) {
+          item.classList.add('not-found');
+        }
+        // Construct label with title and date
+        const title = ev.title || 'ללא כותרת';
+        const dateStr = ev.date || '';
+        item.textContent = title + (dateStr ? ' (' + dateStr + ')' : '');
+        // Store list item for highlighting later
+        listItemByEventId[ev.eventID] = item;
+        item.addEventListener('click', () => {
+          // Highlight in the list
+          highlightListItem(ev.eventID);
+          // Pan to marker if available
+          const record = markers[ev.eventID];
+          if (record) {
+            map.setView([record.lat, record.lng], 15);
+            // Ensure marker popup shows the correct event in group
+            const marker = record.marker;
+            if (marker) {
+              marker.currentIndex = marker.groupEvents.findIndex(e => e.eventID === ev.eventID);
+              marker.setPopupContent(buildPopupContent(ev, record.groupKey, marker.currentIndex));
+              marker.openPopup();
+            }
+            updateDetails(ev, record.lat, record.lng);
+          } else {
+            updateDetails(ev, null, null);
+          }
+        });
+        eventListEl.appendChild(item);
+      });
+    }
+
+    /**
+     * Build popup HTML content for a specific event in a location group.
+     * Includes navigation controls if multiple events share the same location.
+     *
+     * @param {Object} event The event object to display.
+     * @param {string} key The location group key.
+     * @param {number} index The index of this event within the group.
+     * @returns {string} HTML markup for the popup.
+     */
+    function buildPopupContent(event, key, index) {
+      // Compose optional links
+      const link1 = createLink(event.externalLink1);
+      const link2 = createLink(event.externalLink2);
+      const links = [link1, link2].filter(Boolean).join(' | ');
+      // Compose the search address string
+      const addrParts = [];
+      if (event.street) addrParts.push(event.street);
+      if (event.houseNumber) addrParts.push(event.houseNumber);
+      addrParts.push('Pardes Hana-Karkur');
+      addrParts.push('Israel');
+      const geocodeQuery = addrParts.filter(Boolean).join(' ');
+      const addressLine = [event.street || '', event.houseNumber || ''].filter(Boolean).join(' ');
+      const attendeesCount = (event.attendees && Array.isArray(event.attendees)) ? event.attendees.length : 0;
+      // Determine actual capacity using totalNumberOfPeopleThatCanAttend, limitNumberOfPeople or maxNumberOfPeople
+      const caps = [];
+      if (typeof event.totalNumberOfPeopleThatCanAttend === 'number') caps.push(event.totalNumberOfPeopleThatCanAttend);
+      if (typeof event.limitNumberOfPeople === 'number') caps.push(event.limitNumberOfPeople);
+      if (typeof event.maxNumberOfPeople === 'number') caps.push(event.maxNumberOfPeople);
+      const positiveCaps = caps.filter(cap => cap > 0);
+      let actualCap;
+      if (positiveCaps.length > 0) {
+        actualCap = Math.min.apply(null, positiveCaps);
+      }
+      let html = '<div class="popup">';
+      html += '<h3>' + (event.title || '') + '</h3>';
+      if (event.date) html += '<p><strong>תאריך:</strong> ' + event.date + '</p>';
+      if (event.hour) html += '<p><strong>שעה:</strong> ' + event.hour + '</p>';
+      if (addressLine) html += '<p><strong>כתובת:</strong> ' + addressLine + '</p>';
+      if (event.placeDescription) html += '<p><strong>תיאור המקום:</strong> ' + event.placeDescription + '</p>';
+      if (typeof actualCap === 'number') {
+        html += '<p><strong>תפוסה:</strong> ' + attendeesCount + ' / ' + actualCap + '</p>';
+      }
+      if (event.details) html += '<p>' + event.details.replace(/\n/g, '<br>') + '</p>';
+      if (links) html += '<p>' + links + '</p>';
+      if (event.eventID) {
+        const eventPageUrl = 'https://2025.hanadiv.org/event-page/' + event.eventID;
+        html += '<p><a href="' + eventPageUrl + '" target="_blank" rel="noopener">לעמוד האירוע</a></p>';
+      }
+      html += '<p><strong>כתובת לחיפוש:</strong> ' + geocodeQuery + '</p>';
+      // Navigation controls if multiple events at the same location
+      const marker = markerLocationMap[key];
+      if (marker && marker.groupEvents && marker.groupEvents.length > 1) {
+        const total = marker.groupEvents.length;
+        const pos = index + 1;
+        html += '<div class="nav-controls">' +
+          '<button onclick="navigateMarker(\'' + key + '\', -1)">◀</button> ' +
+          pos + '/' + total + ' ' +
+          '<button onclick="navigateMarker(\'' + key + '\', 1)">▶</button>' +
+          '</div>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    /**
+     * Navigate between events at the same location.
+     * Adjusts the marker's current index, updates the popup content and details panel,
+     * and highlights the corresponding list item.
+     *
+     * @param {string} key The location group key.
+     * @param {number} direction +1 for next event, -1 for previous event.
+     */
+    function navigateMarker(key, direction) {
+      const marker = markerLocationMap[key];
+      if (!marker || !marker.groupEvents) return;
+      const total = marker.groupEvents.length;
+      if (total <= 1) return;
+      let newIndex = marker.currentIndex + direction;
+      if (newIndex < 0) newIndex = total - 1;
+      if (newIndex >= total) newIndex = 0;
+      marker.currentIndex = newIndex;
+      const event = marker.groupEvents[newIndex];
+
+      // Check if popup is currently open
+      const isPopupOpen = marker.isPopupOpen();
+
+      // Update the popup content
+      marker.setPopupContent(buildPopupContent(event, key, newIndex));
+
+      // If popup was open, ensure it stays open after content update
+      if (isPopupOpen) {
+        marker.openPopup();
+      }
+
+      highlightListItem(event.eventID);
+      // Update details panel and recenter map
+      const latLng = marker.getLatLng();
+      updateDetails(event, latLng.lat, latLng.lng);
+    }
+
+    /**
+     * Highlight the list item corresponding to the given event ID.
+     * Removes the 'active' class from all items, adds it to the desired item,
+     * and scrolls it into view.
+     *
+     * @param {number|string} eventId The ID of the event to highlight.
+     */
+    function highlightListItem(eventId) {
+      document.querySelectorAll('.event-item').forEach((el) => el.classList.remove('active'));
+      const item = listItemByEventId[eventId];
+      if (item) {
+        item.classList.add('active');
+        // Scroll into view for better UX
+        item.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
+  </script>
+</body>
+</html>
