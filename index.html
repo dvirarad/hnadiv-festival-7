@@ -145,6 +145,110 @@
       font-weight: bold;
     }
 
+    /* Search input styling */
+    #searchInput {
+      width: 100%;
+      padding: 8px;
+      margin-bottom: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-size: 14px;
+      direction: rtl;
+      text-align: right;
+    }
+
+    #searchInput::placeholder {
+      color: #999;
+    }
+
+    /* Favorite/bookmark button styling */
+    .btn-favorite {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      padding: 4px 8px;
+      transition: transform 0.2s;
+    }
+
+    .btn-favorite:hover {
+      transform: scale(1.2);
+    }
+
+    .btn-favorite.favorited {
+      filter: drop-shadow(0 0 3px #ff6b6b);
+    }
+
+    /* Directions button */
+    .btn-directions {
+      background: #4CAF50;
+      color: white;
+      border: none;
+      padding: 8px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-top: 8px;
+      font-size: 14px;
+      width: 100%;
+      transition: background 0.2s;
+    }
+
+    .btn-directions:hover {
+      background: #45a049;
+    }
+
+    /* "Next nearby events" section */
+    .next-events-section {
+      margin-top: 12px;
+      padding: 8px;
+      background: #fffacd;
+      border-radius: 4px;
+      border-left: 3px solid #FFD700;
+    }
+
+    .next-events-section h4 {
+      margin: 0 0 8px 0;
+      font-size: 13px;
+      color: #333;
+    }
+
+    .next-event-item {
+      background: white;
+      padding: 6px;
+      margin-bottom: 6px;
+      border-radius: 3px;
+      border: 1px solid #ddd;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .next-event-item:hover {
+      background: #f0f0f0;
+    }
+
+    .next-event-time {
+      color: #FF6347;
+      font-weight: bold;
+      font-size: 11px;
+    }
+
+    .next-event-distance {
+      color: #666;
+      font-size: 11px;
+    }
+
+    /* Event highlighting by time */
+    .event-item.happening-now {
+      background: #90EE90;
+      border-left: 3px solid #228B22;
+    }
+
+    .event-item.happening-soon {
+      background: #FFFFE0;
+      border-left: 3px solid #FFD700;
+    }
+
     /* Align Hebrew text to the right for RTL languages */
     #sidebar,
     #details,
@@ -172,6 +276,13 @@
       </div>
       <p id="progressText" style="text-align: center; margin: 4px 0 0 0; font-size: 12px;"></p>
     </div>
+    <!-- Search input for event name -->
+    <input
+      type="text"
+      id="searchInput"
+      placeholder="חפש אירוע לפי שם..."
+      style="margin-bottom: 8px;"
+    />
     <!-- Day filter checkboxes will be inserted here dynamically -->
     <div id="dayFilterContainer">
       <strong>סינון לפי ימים:</strong><br />
@@ -220,6 +331,19 @@
     // Map of event ID to corresponding list item element for highlighting
     const listItemByEventId = {};
 
+    // Favorites storage (using localStorage for persistence)
+    const favorites = (() => {
+      try {
+        const stored = localStorage.getItem('eventFavorites');
+        return stored ? JSON.parse(stored) : new Set();
+      } catch (e) {
+        return new Set();
+      }
+    })();
+
+    // Current search query
+    let currentSearchQuery = '';
+
     // Add OpenStreetMap tiles
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
@@ -233,6 +357,102 @@
       const hasProtocol = /^(https?:)?\/\//.test(url);
       const fullUrl = hasProtocol ? url : 'https://' + url;
       return '<a href="' + fullUrl + '" target="_blank" rel="noopener">' + url + '</a>';
+    }
+
+    // Toggle favorite status for an event
+    function toggleFavorite(eventID) {
+      if (favorites.has(eventID)) {
+        favorites.delete(eventID);
+      } else {
+        favorites.add(eventID);
+      }
+      // Save to localStorage
+      try {
+        localStorage.setItem('eventFavorites', JSON.stringify(Array.from(favorites)));
+      } catch (e) {
+        console.warn('Could not save favorites to localStorage');
+      }
+      renderEventList();
+    }
+
+    // Check if event is favorited
+    function isFavorited(eventID) {
+      return favorites.has(eventID) || (Array.isArray(favorites) && favorites.includes(eventID));
+    }
+
+    // Calculate distance between two coordinates (in km)
+    function calculateDistance(lat1, lng1, lat2, lng2) {
+      const R = 6371; // Earth's radius in km
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLng = (lng2 - lng1) * Math.PI / 180;
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLng / 2) * Math.sin(dLng / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return R * c;
+    }
+
+    // Parse time string (HH:MM format) to minutes since midnight
+    function timeToMinutes(timeStr) {
+      if (!timeStr) return null;
+      const parts = timeStr.split(':');
+      return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+    }
+
+    // Check if event is happening now (within current hour)
+    function isHappeningNow(event) {
+      const now = new Date();
+      const currentHour = ('0' + now.getHours()).slice(-2);
+      const currentMinute = ('0' + now.getMinutes()).slice(-2);
+      const currentTime = currentHour + ':' + currentMinute;
+      const currentMinutes = timeToMinutes(currentTime);
+      const eventStartMinutes = timeToMinutes(event.hour);
+      const eventEndMinutes = eventStartMinutes + 120; // Assume 2 hour events
+      return eventStartMinutes && currentMinutes >= eventStartMinutes && currentMinutes < eventEndMinutes;
+    }
+
+    // Check if event is happening soon (within next 30 minutes)
+    function isHappeningSoon(event) {
+      const now = new Date();
+      const currentHour = ('0' + now.getHours()).slice(-2);
+      const currentMinute = ('0' + now.getMinutes()).slice(-2);
+      const currentTime = currentHour + ':' + currentMinute;
+      const currentMinutes = timeToMinutes(currentTime);
+      const eventStartMinutes = timeToMinutes(event.hour);
+      return eventStartMinutes && currentMinutes < eventStartMinutes && eventStartMinutes - currentMinutes <= 30;
+    }
+
+    // Find nearby events that start around when current event ends
+    function findNextNearbyEvents(event, maxDistanceKm = 0.5) {
+      const nextEvents = [];
+      if (!markers[event.eventID] || !markers[event.eventID].lat) return nextEvents;
+
+      const eventCoords = markers[event.eventID];
+      const eventEndMinutes = timeToMinutes(event.hour) + 120; // Assume 2 hour events
+
+      window.allEvents.forEach(otherEvent => {
+        if (otherEvent.eventID === event.eventID) return;
+        if (!markers[otherEvent.eventID] || !markers[otherEvent.eventID].lat) return;
+
+        const otherCoords = markers[otherEvent.eventID];
+        const distance = calculateDistance(eventCoords.lat, eventCoords.lng, otherCoords.lat, otherCoords.lng);
+
+        if (distance > maxDistanceKm) return;
+
+        const otherStartMinutes = timeToMinutes(otherEvent.hour);
+        // Check if other event starts within 30-90 minutes after current event ends
+        if (otherStartMinutes && otherStartMinutes >= eventEndMinutes && otherStartMinutes <= eventEndMinutes + 60) {
+          nextEvents.push({
+            event: otherEvent,
+            distance: distance,
+            startMinutes: otherStartMinutes
+          });
+        }
+      });
+
+      // Sort by start time
+      nextEvents.sort((a, b) => a.startMinutes - b.startMinutes);
+      return nextEvents.slice(0, 3); // Return top 3
     }
 
     // Update the details panel with full event information
@@ -298,7 +518,53 @@
       } else {
         html += '<p><strong>קואורדינטות:</strong> לא זמינות (לא ניתן לאתר את המיקום)</p>';
       }
+
+      // Add favorite button
+      const favIcon = isFavorited(event.eventID) ? '❤️' : '🤍';
+      html += '<button class="btn-favorite ' + (isFavorited(event.eventID) ? 'favorited' : '') + '" onclick="toggleFavorite(' + event.eventID + ')">' + favIcon + ' אהבתי</button>';
+
+      // Add directions button if we have coordinates
+      if (typeof lat === 'number' && typeof lng === 'number') {
+        html += '<button class="btn-directions" onclick="openMaps(' + lat + ', ' + lng + ', \'' + (event.title || 'Event').replace(/'/g, "\\'") + '\')">🗺️ הוראות דרך</button>';
+      }
+
+      // Add next nearby events section
+      const nextEvents = findNextNearbyEvents(event);
+      if (nextEvents.length > 0) {
+        html += '<div class="next-events-section">';
+        html += '<h4>🎯 אירועים קרובים בסמוך:</h4>';
+        nextEvents.forEach(item => {
+          const minutes = item.startMinutes % 60;
+          const hours = Math.floor(item.startMinutes / 60);
+          const timeStr = ('0' + hours).slice(-2) + ':' + ('0' + minutes).slice(-2);
+          html += '<div class="next-event-item" onclick="highlightListItem(' + item.event.eventID + '); map.setView([' + item.event.lat + ', ' + item.event.lng + '], 15);">';
+          html += '<div><strong>' + (item.event.title || 'Event') + '</strong></div>';
+          html += '<div class="next-event-time">⏰ ' + timeStr + '</div>';
+          html += '<div class="next-event-distance">📍 ' + item.distance.toFixed(2) + ' km</div>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+
       detailsEl.innerHTML = html;
+    }
+
+    // Open maps with directions
+    function openMaps(lat, lng, title) {
+      // Check if user is on mobile
+      const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+      if (isMobile) {
+        // Try Apple Maps first on iOS, Google Maps on Android
+        const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+        if (isIOS) {
+          window.open('maps://maps.apple.com/?daddr=' + lat + ',' + lng + '&q=' + encodeURIComponent(title));
+        } else {
+          window.open('https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng);
+        }
+      } else {
+        // Desktop - open Google Maps
+        window.open('https://www.google.com/maps/search/?api=1&query=' + lat + ',' + lng);
+      }
     }
 
     // Shared geocoding helper function used by both initial load and background geocoding
@@ -601,6 +867,12 @@
         }
         // Render the initial event list
         renderEventList();
+
+        // Add search input event listener
+        const searchInput = document.getElementById('searchInput');
+        if (searchInput) {
+          searchInput.addEventListener('input', renderEventList);
+        }
       } catch (err) {
         console.error('Failed to load events', err);
       }
@@ -796,11 +1068,20 @@
         // If no capacity information is provided, assume seats are available
         return true;
       }
-      // Filter events based on selected days and availability
+      // Get search query
+      const searchInput = document.getElementById('searchInput');
+      const searchQuery = searchInput ? searchInput.value.toLowerCase() : '';
+
+      // Filter events based on selected days, availability, and search
       const eventsToShow = window.allEvents.filter((ev) => {
         const matchesDay = selectedDays.length > 0 ? selectedDays.includes(ev.date) : true;
         const matchesAvailability = showAvailableOnly ? isEventAvailable(ev) : true;
-        return matchesDay && matchesAvailability;
+        // Search in title, description, and location
+        const matchesSearch = searchQuery === '' ||
+                             (ev.title && ev.title.toLowerCase().includes(searchQuery)) ||
+                             (ev.placeDescription && ev.placeDescription.toLowerCase().includes(searchQuery)) ||
+                             (ev.street && ev.street.toLowerCase().includes(searchQuery));
+        return matchesDay && matchesAvailability && matchesSearch;
       });
       // Display each event
       eventsToShow.forEach((ev) => {
@@ -810,10 +1091,17 @@
         if (!markers[ev.eventID]) {
           item.classList.add('not-found');
         }
+        // Add time-based highlighting
+        if (isHappeningNow(ev)) {
+          item.classList.add('happening-now');
+        } else if (isHappeningSoon(ev)) {
+          item.classList.add('happening-soon');
+        }
         // Construct label with title and date
         const title = ev.title || 'ללא כותרת';
         const dateStr = ev.date || '';
-        item.textContent = title + (dateStr ? ' (' + dateStr + ')' : '');
+        const favIcon = isFavorited(ev.eventID) ? '❤️' : '';
+        item.textContent = favIcon + ' ' + title + (dateStr ? ' (' + dateStr + ')' : '');
         // Store list item for highlighting later
         listItemByEventId[ev.eventID] = item;
         item.addEventListener('click', () => {
