@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Export Geocode Cache</title>
+  <style>
+    body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+    .container { background: white; padding: 20px; border-radius: 5px; max-width: 600px; }
+    button { padding: 10px 20px; font-size: 14px; cursor: pointer; margin: 10px 0; }
+    textarea { width: 100%; height: 300px; font-family: monospace; }
+    .success { color: green; }
+    .info { color: #666; margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📋 Export Geocode Cache</h1>
+    <p class="info">Use this page to extract the geocode cache from localStorage and export it.</p>
+    
+    <button onclick="exportCache()">📥 Export Cache</button>
+    <button onclick="copyToClipboard()">📋 Copy to Clipboard</button>
+    <button onclick="downloadFile()">💾 Download as corrections.json</button>
+    
+    <h3>Cache Preview:</h3>
+    <textarea id="output" readonly></textarea>
+    
+    <p class="info">
+      <strong>How to use:</strong><br>
+      1. Click "Export Cache" to load your cache<br>
+      2. Click "Download as corrections.json" to save the file<br>
+      3. Replace the corrections.json in your repo with this file<br>
+      4. Commit and push to GitHub
+    </p>
+  </div>
+
+  <script>
+    function exportCache() {
+      try {
+        // Get cache from localStorage (same as the main app)
+        const geocodeCacheStr = localStorage.getItem('geocodeCache');
+        const coordinateOverridesStr = localStorage.getItem('coordinateOverrides');
+        
+        const geocodeCache = geocodeCacheStr ? JSON.parse(geocodeCacheStr) : {};
+        const coordinateOverrides = coordinateOverridesStr ? JSON.parse(coordinateOverridesStr) : {};
+        
+        const correctionData = {
+          overrides: coordinateOverrides,
+          geocodeCache: geocodeCache,
+          lastUpdated: new Date().toISOString(),
+          version: "1.0",
+          description: "Festival location corrections, geocoding cache, and coordinate overrides"
+        };
+        
+        const json = JSON.stringify(correctionData, null, 2);
+        document.getElementById('output').value = json;
+        
+        console.log('✅ Cache exported! Entries:', Object.keys(geocodeCache).length);
+        alert('✅ Cache exported! ' + Object.keys(geocodeCache).length + ' entries found.');
+      } catch (err) {
+        alert('❌ Error: ' + err.message);
+        console.error(err);
+      }
+    }
+    
+    function copyToClipboard() {
+      const textarea = document.getElementById('output');
+      if (!textarea.value) {
+        alert('❌ Export cache first!');
+        return;
+      }
+      textarea.select();
+      document.execCommand('copy');
+      alert('✅ Copied to clipboard!');
+    }
+    
+    function downloadFile() {
+      const textarea = document.getElementById('output');
+      if (!textarea.value) {
+        alert('❌ Export cache first!');
+        return;
+      }
+      
+      const blob = new Blob([textarea.value], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'corrections.json';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    }
+  </script>
+</body>
+</html>
